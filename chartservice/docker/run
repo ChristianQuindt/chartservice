@@ -1,0 +1,11 @@
+#!/bin/sh
+set -e
+
+JAVA_OPTS=""
+
+if [ -f "/opt/itscope/redgiant-mixpanel.vmoptions" ]; then
+  JAVA_OPTS="$(cat /opt/itscope/redgiant-mixpanel.vmoptions)"
+fi
+
+echo Starting Streetprices server with additional arguments: ${JAVA_OPTS}
+java ${JAVA_OPTS} -jar /opt/itscope/microservice.jar --logging.file=/var/log/itscope/redgiant-mixpanel.log

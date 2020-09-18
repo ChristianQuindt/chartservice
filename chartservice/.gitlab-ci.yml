@@ -1,0 +1,88 @@
+image: registry.local.itscope.com:5001/itscope/docker/maven:latest
+
+variables:
+  MAVEN_CLI_OPTS: "-s .m2/settings.xml --batch-mode -Dvaadin.testbench.developer.license=$VAADIN_TESTBENCH_LICENSE"
+  MAVEN_OPTS: "-Dmaven.repo.local=.m2/repository"
+
+cache:
+  paths:
+    - .m2/repository/
+    - target/
+
+stages:
+  - build
+  - test
+  - deploy
+  - docker
+  - release
+
+build:
+  stage: build
+  script:
+    - mvn $MAVEN_CLI_OPTS compile
+
+test:
+  stage: test
+  script:
+    - mvn $MAVEN_CLI_OPTS test
+
+deploy:
+  stage: deploy
+  script:
+    - mvn $MAVEN_CLI_OPTS deploy -DskipTests
+    # Get the current version of the project and save it as a dotenv file to pass the variable to the docker stage
+    # Documentation for this feature: https://docs.gitlab.com/ee/ci/variables/README.html#inherit-environment-variables
+    # Do not use "--show-version" in this maven command because it will add more output to the version
+    - MICROSERVICE_VERSION=$(mvn $MAVEN_CLI_OPTS help:evaluate -Dexpression=project.version -q -DforceStdout)
+    - echo "$MICROSERVICE_VERSION"
+    - echo "MICROSERVICE_VERSION=$MICROSERVICE_VERSION" >> deploy.env
+    # Output the dotenv file content for debugging
+    - cat deploy.env
+  artifacts:
+    reports:
+      dotenv: deploy.env
+
+docker:
+  image: docker:stable
+  stage: docker
+  script:
+    # Output the variable for debugging
+    - echo "$MICROSERVICE_VERSION"
+    - docker info
+    # Deploy to the production docker repository for release versions
+    # String compare like  if [[ $MICROSERVICE_VERSION == *"SNAPSHOT"* ]]; did not work so we use the length of the version
+    - |
+      if [[ ${#MICROSERVICE_VERSION} -gt 10 ]];
+      then
+        echo "$REGISTRY_PASSWORD" | docker login -u "$REGISTRY_USER" --password-stdin registry.local.itscope.com:5001
+        docker build --no-cache --build-arg MICROSERVICE_VERSION=$MICROSERVICE_VERSION -t registry.local.itscope.com:5001/itscope/docker/redgiant-mixpanel:$MICROSERVICE_VERSION -t registry.local.itscope.com:5001/itscope/docker/redgiant-mixpanel:latest docker/.
+        docker push registry.local.itscope.com:5001/itscope/docker/redgiant-mixpanel
+      else
+        echo "$MICROSERVICE_VERSION"
+        docker build --no-cache --build-arg MICROSERVICE_VERSION=$MICROSERVICE_VERSION -t pascal.itscope.com:5000/itscope/docker/redgiant-mixpanel:$MICROSERVICE_VERSION -t pascal.itscope.com:5000/itscope/docker/redgiant-mixpanel:latest docker/.
+        docker push pascal.itscope.com:5000/itscope/docker/redgiant-mixpanel
+      fi
+  dependencies:
+    - deploy
+
+release:
+  # Use our custom maven-jdk14 image with git and ssh
+  image: registry.local.itscope.com:5001/itscope/docker/maven:latest
+  stage: release
+  script:
+    - ln -s /var/cache/maven .m2
+      # Add the ssh key to allow push to the repository
+    - eval $(ssh-agent)
+    - ssh-add <(echo "$SSH_PRIVATE_KEY")
+      # Add the gitlab host to known hosts to allow checkout
+    - mkdir -p ~/.ssh
+    - ssh-keyscan -t rsa git.local.itscope.com >> ~/.ssh/known_hosts
+      # Config gitlab user
+    - git config user.name "gitlab"
+    - git config user.email "gitlab@itscope.com"
+    - git checkout master
+    - git reset --hard origin/master
+    - mvn $MAVEN_CLI_OPTS clean release:prepare -Dresume=false -DautoVersionSubmodules=true -DdryRun=false -Dmaven.test.skip=true
+  only:
+    - master
+  when: manual

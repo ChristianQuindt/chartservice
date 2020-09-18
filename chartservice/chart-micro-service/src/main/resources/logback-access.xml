@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration scan="false">
+	<appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+		<encoder class="de.itscope.chartservice.log.JsonAccessEncoder"/>
+	</appender>
+
+	<appender-ref ref="STDOUT"/>
+
+</configuration>
